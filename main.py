@@ -73,7 +73,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
         correctness_before_optim += prediction_before_optim.eq(target.view_as(prediction_before_optim)).sum().item()#Add to correct whenever the most likely prediction is the same as the ground truth
         wandb.log({
             'batch_loss_before_optim': batch_loss_before_optim.item(),
-            'accuracy_before_optimization': correctness_before_optim / ((batch_id + 1) * len(data))
+            'accuracy_before_optimization': correctness_before_optim / total_samples
             })
         optimizer.zero_grad()#Reset the gradients of all optimized tensors for the current batch
         batch_loss_before_optim.backward()
@@ -85,27 +85,33 @@ def train(args, model, device, train_loader, optimizer, epoch):
         correctness_after_optim += prediction_after_optim.eq(target.view_as(prediction_after_optim)).sum().item()#Add to correct whenever the most likely prediction is the same as the ground truth
         wandb.log({
             'batch_loss_after_optim': batch_loss_after_optim.item(),
-            'accuracy_after_optimization': correctness_after_optim / ((batch_id + 1) * len(data))
+            'accuracy_after_optimization': correctness_after_optim / total_samples
             })
         if batch_id % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-        epoch, batch_id * len(data), len(train_loader.dataset),
-        100. * batch_id / len(train_loader), batch_loss_after_optim.item()))
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tAccuracy: {:.6f}'.format(
+        epoch, total_samples, len(train_loader.dataset),
+        100. * batch_id / len(train_loader), correctness_after_optim/total_samples))
 
 
 
 
-def test(model, device, test_loader):
+def test(args, model, device, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
+    total_samples = 0
     with torch.no_grad():
         for data, target in test_loader:
+            total_samples += args.batch_size
             data, target = data.to(device), target.to(device)
             output = model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
+            wandb.log({
+                'test_loss': test_loss / total_samples,
+                'test_accuracy': correct / total_samples
+            })
 
     test_loss /= len(test_loader.dataset)
 
@@ -119,11 +125,11 @@ def main():
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
     parser.add_argument('--batch_size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
-    parser.add_argument('--epochs', type=int, default=5, metavar='N',
+    parser.add_argument('--epochs', type=int, default=40, metavar='N',
                         help='number of epochs to train (default: 14)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 1.0)')
-    parser.add_argument('--gamma', type=float, default=0.8, metavar='M',
+    parser.add_argument('--gamma', type=float, default=0.75, metavar='M',
                         help='Learning rate step gamma (default: 0.7)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
@@ -131,7 +137,7 @@ def main():
                         help='disables macOS GPU training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=30, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-model', action='store_true', default=False,
                         help='For Saving the current Model')
@@ -141,8 +147,7 @@ def main():
     wandb.login(key='6f35bcdd0108305865b662cb61e4572421e36d7a', relogin=True)
     wandb.init(project="pytorch-intro")
     wandb.config.update(args, allow_val_change=True)
-    wandb.log
-    
+
 
     torch.manual_seed(args.seed)
 
@@ -159,8 +164,8 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)) #Normalize the tensor so the nn works better with means and standard deviations
         ])
-    train_dataset = datasets.CIFAR10('../data', train=True, download=True, transform=transform)
-    test_dataset = datasets.CIFAR10('../data', train=False, download=True, transform=transform)
+    train_dataset = datasets.CIFAR10('./data', train=True, download=True, transform=transform)
+    test_dataset = datasets.CIFAR10('./data', train=False, download=True, transform=transform)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, shuffle=True, batch_size=args.batch_size)
@@ -171,7 +176,7 @@ def main():
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     for epoch in range(1, args.epochs + 1):
         train(args, model, device, train_loader, optimizer, epoch)
-        test(model, device, test_loader)
+        test(args, model, device, test_loader)
         scheduler.step()
 
     if args.save_model:
